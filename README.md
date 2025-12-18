@@ -1,0 +1,2 @@
+# Invisible-Watermark-Checkin
+BNU数字图像处理大作业，目标是实现一个利用隐形水印技术实现现场签到的小程序
