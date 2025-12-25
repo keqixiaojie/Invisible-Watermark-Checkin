@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>教师课程控制台</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .page { display: none; }
+        .active { display: block; }
+        .progress-micro { height: 15px; font-size: 0.7rem; border-radius: 10px; }
+        .course-card { transition: transform 0.2s; border: none; }
+        .course-card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px rgba(0,0,0,0.1) !important; }
+        
+        /* 骨架屏动画 */
+        .skeleton {
+            background: #e0e0e0;
+            background: linear-gradient(90deg, #eff1f3 25%, #e2e2e2 50%, #eff1f3 75%);
+            background-size: 200% 100%;
+            animation: skeleton-loading 1.5s infinite;
+            border-radius: 4px;
+            color: transparent !important;
+        }
+        @keyframes skeleton-loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* 空状态 */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6c757d;
+        }
+        .empty-icon { font-size: 4rem; opacity: 0.5; margin-bottom: 15px; }
+    </style>
+</head>
+<body class="bg-light p-4">
+
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 9999">
+        <div id="liveToast" class="toast align-items-center text-white bg-primary border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body" id="toast-msg">系统通知</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        </div>
+    </div>
+
+    <div id="login-page" class="page active container" style="max-width: 400px; margin-top: 100px;">
+        <div class="card p-4 shadow-lg border-0">
+            <h3 class="text-center mb-4 text-primary fw-bold">签到系统 · 教师端</h3>
+            <input type="text" id="username" class="form-control mb-3" placeholder="用户名" value="teacher_wang">
+            <input type="password" id="password" class="form-control mb-3" placeholder="密码" value="123">
+            <button onclick="login()" class="btn btn-primary w-100 btn-lg">登录 / 注册</button>
+            <p id="login-msg" class="text-danger mt-2 text-center"></p>
+        </div>
+    </div>
+
+    <div id="course-page" class="page container">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2 class="fw-bold">我的课程</h2>
+            <div class="d-flex align-items-center gap-3">
+                <span class="text-muted small" id="user-display">欢迎回来</span>
+                <button onclick="logout()" class="btn btn-outline-danger btn-sm">退出</button>
+            </div>
+        </div>
+
+        <div class="card p-4 mb-5 border-0 shadow-sm">
+            <h5 class="mb-3">➕ 创建新课程</h5>
+            <div class="row g-2">
+                <div class="col-md-4"><input type="text" id="c-name" class="form-control" placeholder="课程名"></div>
+                <div class="col-md-3"><input type="text" id="c-sem" class="form-control" placeholder="学期 (如: 2023秋)"></div>
+                <div class="col-md-3"><input type="text" id="c-loc" class="form-control" placeholder="地点"></div>
+                <div class="col-md-2"><button onclick="createCourse()" class="btn btn-success w-100">立即创建</button></div>
+            </div>
+        </div>
+
+        <div id="course-list" class="row"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        const API_URL = window.location.origin;
+        let token = localStorage.getItem("token");
+        let toastInstance = null;
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            const toastEl = document.getElementById('liveToast');
+            toastInstance = new bootstrap.Toast(toastEl, { delay: 3000 });
+
+            if (token) {
+                switchPage('course-page');
+                loadCourses();
+
+                // 【新增】显示用户名
+                displayUsername();
+            }
+        });
+
+        // ==========================================
+        // 【新增】解析 Token 获取用户名并显示
+        // ==========================================
+        function displayUsername() {
+            try {
+                if (!token) return;
+                
+                // 1. JWT 的第二部分是 Payload (Base64编码)
+                const base64Url = token.split('.')[1];
+                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                
+                // 2. 解码 Base64 (处理中文乱码)
+                const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function(c) {
+                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                }).join(''));
+
+                // 3. 解析 JSON
+                const payload = JSON.parse(jsonPayload);
+                
+                // 4. 获取 sub 字段 (通常存放用户名)
+                const username = payload.sub || "老师";
+                
+                // 5. 更新 UI
+                document.getElementById('user-display').innerHTML = `👋 欢迎回来，<b>${username}</b>`;
+                
+            } catch (e) {
+                console.error("解析Token失败", e);
+                document.getElementById('user-display').innerText = "欢迎回来";
+            }
+        }
+
+        // ==========================================
+        // 【核心优化】统一请求封装 (自动加Token + 自动登出)
+        // ==========================================
+        async function authFetch(endpoint, options = {}) {
+            // 1. 自动合并 Header (带上 Token)
+            const headers = {
+                'Authorization': `Bearer ${token}`,
+                ...(options.headers || {}) // 合并用户传入的 header
+            };
+
+            // 2. 发起请求
+            const res = await fetch(`${API_URL}${endpoint}`, {
+                ...options,
+                headers: headers
+            });
+
+            // 3. 【自动登出】如果遇到 401 Unauthorized
+            if (res.status === 401) {
+                console.warn("Token已过期，自动登出");
+                alert("登录已过期，请重新登录");
+                logout(); // 踢回登录页
+                return null; // 中断后续逻辑
+            }
+
+            return res;
+        }
+
+        // --- 辅助函数 ---
+        function showToast(msg) {
+            document.getElementById('toast-msg').innerText = msg;
+            toastInstance.show();
+        }
+
+        function switchPage(pageId) {
+            document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
+            document.getElementById(pageId).classList.add('active');
+        }
+
+        function logout() {
+            localStorage.removeItem("token");
+            location.reload(); // 刷新页面回到初始状态
+        }
+
+        // --- 1. 登录 (登录不需要用 authFetch，因为还没有 Token) ---
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const formData = new URLSearchParams();
+            formData.append('username', username);
+            formData.append('password', password);
+
+            try {
+                let res = await fetch(`${API_URL}/auth/login`, { method: 'POST', body: formData });
+                
+                // 登录接口的 401 是密码错误，不应该触发自动登出逻辑
+                if (res.status === 401) {
+                    if(confirm("账号或密码错误。是否注册新账号？")) {
+                        res = await fetch(`${API_URL}/auth/register`, {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({username, password, role: 'teacher'})
+                        });
+                    } else return;
+                }
+                
+                if (!res.ok) throw new Error("登录失败");
+
+                const data = await res.json();
+                token = data.access_token;
+                localStorage.setItem("token", token);
+                switchPage('course-page');
+                loadCourses();
+            } catch (err) {
+                document.getElementById('login-msg').innerText = err.message;
+            }
+        }
+
+        // --- 2. 课程列表 ---
+        let pollInterval = null;
+
+        async function loadCourses() {
+            const listDiv = document.getElementById('course-list');
+            
+            if (!pollInterval && listDiv.innerHTML.trim() === "") {
+                listDiv.innerHTML = generateSkeleton(3);
+            }
+
+            try {
+                // 使用 authFetch，路径只需要写 /courses/
+                const res = await authFetch('/courses/');
+                if (!res) return; // 如果是 401，authFetch 已经处理了跳转，这里直接返回
+
+                const courses = await res.json();
+                
+                if (courses.length === 0) {
+                    listDiv.innerHTML = `
+                        <div class="col-12 empty-state">
+                            <div class="empty-icon">📭</div>
+                            <h4>暂无课程</h4>
+                            <p>还没有课程哦，快点击上方创建第一门课程吧！</p>
+                        </div>`;
+                    return;
+                }
+
+                listDiv.innerHTML = ""; 
+                let hasProcessingTask = false;
+
+                courses.forEach(c => {
+                    let footerHtml = '';
+                    let cardClass = 'shadow-sm'; 
+
+                    if (c.status === 'completed') {
+                        footerHtml = `
+                            <div class="d-flex gap-2">
+                                <button onclick="location.href='course_detail.html?id=${c.id}&name=${encodeURIComponent(c.course_name)}'" class="btn btn-primary flex-grow-1">进入管理</button>
+                                <button onclick="deleteCourse(${c.id})" class="btn btn-outline-danger">删除</button>
+                            </div>`;
+                    } else if (c.status === 'processing') {
+                        hasProcessingTask = true;
+                        cardClass = 'border-primary border-2';
+                        footerHtml = `
+                            <div class="d-flex align-items-center justify-content-between mb-1">
+                                <small class="text-primary fw-bold">🚀 正在生成...</small>
+                                <small class="text-muted">${c.progress}%</small>
+                            </div>
+                            <div class="progress progress-micro">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
+                                     style="width: ${c.progress}%"></div>
+                            </div>`;
+                    } else if (c.status === 'pending') {
+                        cardClass = 'border-warning border-2';
+                        footerHtml = `
+                            <div class="text-center text-warning mb-2"><small>⚠️ 任务已中断</small></div>
+                            <div class="d-flex gap-2">
+                                <button onclick="regenerate(${c.id})" class="btn btn-warning text-white flex-grow-1 btn-sm">🔄 重新生成</button>
+                                <button onclick="deleteCourse(${c.id})" class="btn btn-outline-secondary btn-sm">删除</button>
+                            </div>`;
+                    } else {
+                        // 状态：出错
+                        // 改为：显示具体错误原因（如果有），并提供“重试”和“删除”两个选择
+                        cardClass = 'border-danger border-2'; // 红框警示
+                        footerHtml = `
+                            <div class="text-center text-danger mb-2">
+                                <small>❌ 生成失败</small>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button onclick="regenerate(${c.id})" class="btn btn-danger text-white flex-grow-1 btn-sm">🔄 重试</button>
+                                
+                                <button onclick="deleteCourse(${c.id})" class="btn btn-outline-secondary btn-sm">删除</button>
+                            </div>
+                        `;
+                    }
+
+                    listDiv.innerHTML += `
+                        <div class="col-md-4 mb-4">
+                            <div class="card h-100 course-card ${cardClass}">
+                                <div class="card-body d-flex flex-column">
+                                    <h5 class="card-title fw-bold mb-1">${c.course_name}</h5>
+                                    <p class="card-text text-muted small mb-4">📅 ${c.semester} &nbsp;|&nbsp; 📍 ${c.location}</p>
+                                    <div class="mt-auto">${footerHtml}</div>
+                                </div>
+                            </div>
+                        </div>`;
+                });
+
+                if (hasProcessingTask) {
+                    if (!pollInterval) {
+                        console.log("启动轮询...");
+                        pollInterval = setInterval(loadCourses, 2000);
+                    }
+                } else {
+                    if (pollInterval) {
+                        console.log("停止轮询");
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function generateSkeleton(count) {
+            let html = '';
+            for(let i=0; i<count; i++) {
+                html += `
+                    <div class="col-md-4 mb-4">
+                        <div class="card h-100 shadow-sm border-0">
+                            <div class="card-body">
+                                <div class="skeleton mb-2" style="width: 60%; height: 24px;"></div>
+                                <div class="skeleton mb-4" style="width: 80%; height: 16px;"></div>
+                                <div class="skeleton mt-auto" style="width: 100%; height: 38px;"></div>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+            return html;
+        }
+
+        // --- 3. 创建课程 ---
+        async function createCourse() {
+            const name = document.getElementById('c-name').value.trim();
+            const sem = document.getElementById('c-sem').value.trim();
+            const loc = document.getElementById('c-loc').value.trim();
+
+            if(!name) { alert("请输入课程名"); return; }
+
+            try {
+                // 使用 authFetch
+                const res = await authFetch('/courses/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({course_name: name, semester: sem, location: loc})
+                });
+                
+                if (!res) return; // 401已处理
+                const data = await res.json();
+
+                if (!res.ok) throw new Error(data.detail);
+
+                document.getElementById('c-name').value = "";
+                document.getElementById('c-sem').value = "";
+                document.getElementById('c-loc').value = "";
+                
+                showToast(`✅ 课程 "${name}" 创建成功`);
+                loadCourses(); 
+
+            } catch (err) {
+                alert("创建失败: " + err.message);
+            }
+        }
+
+        // --- 4. 删除课程 ---
+        async function deleteCourse(id) {
+            if(!confirm("确定要删除吗？")) return;
+            try {
+                // 使用 authFetch
+                const res = await authFetch(`/courses/${id}`, { method: 'DELETE' });
+                if (!res) return;
+
+                if(res.ok) {
+                    showToast("🗑️ 课程已删除");
+                    loadCourses();
+                } else alert("删除失败");
+            } catch(e) { alert("网络错误"); }
+        }
+
+        // --- 5. 重新生成 ---
+        async function regenerate(id) {
+            try {
+                showToast("⏳ 正在请求重启...");
+                // 使用 authFetch
+                const res = await authFetch(`/courses/${id}/regenerate`, { method: 'POST' });
+                if (!res) return;
+
+                if (res.ok) {
+                    showToast("✅ 任务已重启");
+                    // 延迟刷新，确保后端状态已更新
+                    setTimeout(loadCourses, 500);
+                } else {
+                    const data = await res.json();
+                    alert("重启失败: " + data.detail);
+                    loadCourses();
+                }
+            } catch (e) { alert("网络错误"); }
+        }
+    </script>
+</body>
+</html>

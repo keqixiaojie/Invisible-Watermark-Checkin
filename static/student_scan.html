@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>扫码签到</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    
+    <style>
+        :root {
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --glass-bg: rgba(255, 255, 255, 0.9);
+            --accent-color: #764ba2;
+        }
+
+        body { 
+            background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+            height: 100vh; width: 100vw; overflow: hidden; 
+            font-family: 'Segoe UI', sans-serif; 
+            margin: 0; padding: 0;
+        }
+        @keyframes gradientBG { 0% {background-position: 0% 50%;} 50% {background-position: 100% 50%;} 100% {background-position: 0% 50%;} }
+        
+        #video-background {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0;
+            mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+            -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+        }
+        video { width: 100%; height: 100%; object-fit: cover; }
+
+        /* HUD 界面 */
+        #scan-interface {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10; pointer-events: none;
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+
+        .hud-header { padding-top: 40px; text-align: center; color: white; text-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+        .hud-header h3 { font-weight: 800; letter-spacing: 1px; margin: 0; }
+
+        .scan-area { flex: 1; display: flex; justify-content: center; align-items: center; position: relative; }
+        
+        .scan-frame {
+            width: 70vw; height: 70vw; max-width: 280px; max-height: 280px;
+            border-radius: 30px; position: relative;
+            box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.3);
+            border: 2px solid rgba(255,255,255,0.8);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .scan-frame.searching .radar-wave { animation: ripple 2s infinite; }
+        .radar-wave {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 100%; height: 100%; border-radius: 30px; border: 2px solid white; opacity: 0;
+        }
+        @keyframes ripple { 0% {width: 100%; height: 100%; opacity: 0.8;} 100% {width: 140%; height: 140%; opacity: 0;} }
+
+        .scan-frame.locked {
+            border-color: #fff; box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.7);
+            transform: scale(1.1); background: rgba(255,255,255,0.1);
+        }
+
+        .hud-footer { padding-bottom: 50px; display: flex; justify-content: center; }
+        .status-pill {
+            background: white; color: var(--accent-color);
+            padding: 12px 30px; border-radius: 50px;
+            font-weight: 700; box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: flex; align-items: center; gap: 10px; transition: all 0.3s;
+        }
+
+        /* --- 遮罩层 --- */
+        #overlay-layer {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 50; 
+            background: rgba(255, 255, 255, 0.3); 
+            backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
+            opacity: 0; transition: opacity 0.4s ease;
+            pointer-events: none;
+            display: flex; justify-content: center; align-items: center;
+        }
+        #overlay-layer.visible { opacity: 1; pointer-events: auto; }
+
+        .glass-card {
+            background: var(--glass-bg);
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            border-radius: 30px; padding: 40px 30px;
+            width: 85%; max-width: 360px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+            text-align: center; color: #333;
+            margin: auto;
+            transform: scale(0.9); transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        #overlay-layer.visible .glass-card { transform: scale(1); }
+
+        .step-container { display: flex; justify-content: space-between; margin-top: 30px; position: relative; }
+        .step-line { position: absolute; top: 15px; left: 0; width: 100%; height: 3px; background: #e9ecef; z-index: 0; }
+        .step-line-fill { position: absolute; top: 15px; left: 0; height: 3px; background: var(--accent-color); z-index: 0; width: 0%; transition: width 0.5s ease; }
+        .step-item { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; }
+        .step-dot { width: 30px; height: 30px; border-radius: 50%; background: #fff; border: 3px solid #e9ecef; color: #fff; display: flex; justify-content: center; align-items: center; transition: all 0.4s; font-size: 0.8rem; }
+        .step-item.active .step-dot { border-color: var(--accent-color); background: var(--accent-color); }
+        .step-item.done .step-dot { border-color: var(--accent-color); background: var(--accent-color); }
+        .step-label { font-size: 0.75rem; color: #adb5bd; margin-top: 8px; font-weight: 600; transition: color 0.3s;}
+        .step-item.active .step-label { color: var(--accent-color); }
+
+        .form-control-modern { background: #f8f9fa; border: 2px solid transparent; border-radius: 15px; padding: 15px; font-weight: 600; color: #495057; }
+        .form-control-modern:focus { background: #fff; border-color: var(--accent-color); box-shadow: 0 0 0 4px rgba(118, 75, 162, 0.1); outline: none; }
+        .btn-gradient { background: var(--primary-gradient); border: none; padding: 15px; font-weight: 700; letter-spacing: 1px; box-shadow: 0 10px 20px rgba(118, 75, 162, 0.3); color: white; }
+        
+        .state-content { display: none; width: 100%; }
+        .state-content.active { display: block; }
+    </style>
+</head>
+<body>
+
+    <div id="video-background">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+    </div>
+
+    <div id="scan-interface">
+        <div class="hud-header">
+            <h3>智慧签到</h3>
+            <p>请对准大屏二维码</p>
+        </div>
+        <div class="scan-area">
+            <div class="scan-frame searching" id="scan-frame">
+                <div class="radar-wave"></div>
+            </div>
+        </div>
+        <div class="hud-footer">
+            <div id="status-pill" class="status-pill">
+                <div class="spinner-border spinner-border-sm text-primary" id="scan-spinner"></div>
+                <span id="status-text">初始化相机...</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="overlay-layer">
+        
+        <div id="state-processing" class="state-content">
+            <div class="glass-card">
+                <div class="mb-4">
+                    <img src="https://cdn-icons-png.flaticon.com/512/2082/2082835.png" width="60" class="mb-3 animate__animated animate__pulse animate__infinite">
+                    <h4 class="fw-bold">正在云端验证</h4>
+                    <p class="text-muted small">AI 正在解析时间特征序列</p>
+                </div>
+                <div class="step-container">
+                    <div class="step-line"></div>
+                    <div class="step-line-fill" id="step-fill"></div>
+                    <div class="step-item active" id="step-1"><div class="step-dot"><i class="bi bi-cloud-upload"></i></div><div class="step-label">上传</div></div>
+                    <div class="step-item" id="step-2"><div class="step-dot"><i class="bi bi-cpu"></i></div><div class="step-label">解码</div></div>
+                    <div class="step-item" id="step-3"><div class="step-dot"><i class="bi bi-shield-check"></i></div><div class="step-label">验证</div></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="state-form" class="state-content">
+            <div class="glass-card">
+                <div class="text-success mb-3" style="font-size: 3rem;"><i class="bi bi-patch-check-fill"></i></div>
+                <h3 class="fw-bold mb-4">验证通过</h3>
+                <div class="text-start mb-3"><input type="text" id="stu-no" class="form-control form-control-modern" placeholder="请输入学号"></div>
+                <div class="text-start mb-4"><input type="text" id="stu-name" class="form-control form-control-modern" placeholder="请输入姓名"></div>
+                <button onclick="submitInfo()" class="btn btn-gradient w-100 rounded-pill">确认并签到</button>
+            </div>
+        </div>
+
+        <div id="state-error" class="state-content">
+            <div class="glass-card">
+                <div class="text-danger mb-3" style="font-size: 3rem;"><i class="bi bi-x-circle-fill"></i></div>
+                <h4 class="fw-bold mb-2">验证未通过</h4>
+                <p class="text-muted small mb-4" id="error-reason">未能识别有效信号</p>
+                <button onclick="restartScan()" class="btn btn-outline-dark w-100 rounded-pill py-3 fw-bold">
+                    <i class="bi bi-arrow-repeat me-2"></i>重新扫描
+                </button>
+            </div>
+        </div>
+
+        <div id="state-success" class="state-content">
+            <div class="glass-card" style="background: rgba(255,255,255,0.95);">
+                <img src="https://cdn-icons-png.flaticon.com/512/190/190411.png" width="80" class="mb-4">
+                <h2 class="fw-bold text-dark mb-2">签到成功!</h2>
+                <p class="text-muted mb-4" id="success-msg">您已完成本次课程考勤</p>
+                <button onclick="closeApp()" class="btn btn-light text-muted rounded-pill px-4">关闭页面</button>
+            </div>
+        </div>
+
+    </div>
+
+<script>
+    const API_URL = window.location.origin;
+    const urlParams = new URLSearchParams(window.location.search);
+    const courseId = urlParams.get('cid');
+
+    const SAMPLE_INTERVAL = 800; 
+    const BATCH_SIZE = 6;        
+    const STABILITY_THRESHOLD = 5;
+    
+    let videoStream = null;
+    let scanLoopId = null;     
+    let captureTimer = null;   
+    let frameBuffer = []; 
+    let captureStartTime = 0;
+    let verifyToken = null;
+    let isCapturing = false;   
+    let stableFrames = 0;
+    let currentSessionId = null; 
+
+    window.onload = async () => {
+        if (!courseId) { showOverlay('state-error', "无效链接"); return; }
+        
+        await checkActiveSession();
+
+        const cNo = localStorage.getItem("my_stu_no");
+        const cName = localStorage.getItem("my_stu_name");
+        if(cNo) document.getElementById('stu-no').value = cNo;
+        if(cName) document.getElementById('stu-name').value = cName;
+
+        if (!document.getElementById('overlay-layer').classList.contains('visible')) {
+            await initCamera();
+        }
+    };
+
+    async function checkActiveSession() {
+        try {
+            const res = await fetch(`${API_URL}/courses/${courseId}/active_session`);
+            const data = await res.json();
+            
+            if (data.active) {
+                currentSessionId = data.session_id;
+                const checkedKey = `checked_in_session_${currentSessionId}`;
+                if (localStorage.getItem(checkedKey)) {
+                    showOverlay('state-success');
+                    document.querySelector('#state-success h2').innerText = "您已签到";
+                    document.getElementById('success-msg').innerText = "请勿重复提交 (当前会话)";
+                    throw new Error("Already checked in"); 
+                }
+            } else {
+                showOverlay('state-error', "当前没有正在进行的签到");
+                document.querySelector('#state-error button').style.display = 'none';
+                throw new Error("No active session");
+            }
+        } catch (e) {
+            if (e.message !== "Already checked in" && e.message !== "No active session") {
+                console.error("Session check failed", e);
+            }
+        }
+    }
+
+    async function initCamera() {
+        try {
+            const constraints = { video: { facingMode: "environment", width: { ideal: 1280 } } };
+            const video = document.getElementById('video');
+            videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+            video.srcObject = videoStream;
+            
+            video.onloadedmetadata = () => {
+                video.play();
+                requestAnimationFrame(smartScanLoop); 
+                updateStatus("正在搜寻信号...", true);
+            };
+        } catch (err) {
+            showOverlay('state-error', "请允许相机权限");
+            document.querySelector('#state-error button').style.display = 'none';
+        }
+    }
+
+    function smartScanLoop() {
+        if (isCapturing || verifyToken) return;
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            canvas.height = video.videoHeight;
+            canvas.width = video.videoWidth;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+
+            if (code && code.data && code.data.includes("cid=")) {
+                stableFrames++;
+                document.getElementById('scan-frame').style.borderColor = "#fff";
+                if (stableFrames >= STABILITY_THRESHOLD) {
+                    startCaptureSequence();
+                    return; 
+                }
+            } else {
+                stableFrames = 0;
+                document.getElementById('scan-frame').style.borderColor = "rgba(255,255,255,0.8)";
+            }
+        }
+        scanLoopId = requestAnimationFrame(smartScanLoop);
+    }
+
+    function startCaptureSequence() {
+        isCapturing = true;
+        cancelAnimationFrame(scanLoopId); 
+        if (navigator.vibrate) navigator.vibrate(200);
+
+        document.getElementById('scan-frame').classList.remove('searching');
+        document.getElementById('scan-frame').classList.add('locked');
+        document.getElementById('status-pill').classList.add('active');
+        updateStatus("信号锁定！保持稳定...", true);
+
+        frameBuffer = [];
+        captureStartTime = Date.now();
+        
+        captureFrame();
+        captureTimer = setInterval(captureFrame, SAMPLE_INTERVAL);
+    }
+
+    function captureFrame() {
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+        const base64 = canvas.toDataURL('image/jpeg', 0.6); 
+        frameBuffer.push(base64);
+
+        updateStatus(`采集图像 (${frameBuffer.length}/${BATCH_SIZE})...`, true);
+
+        if (frameBuffer.length >= BATCH_SIZE) {
+            clearInterval(captureTimer); 
+            runFakeProgressAndVerify();
+        }
+    }
+
+    async function runFakeProgressAndVerify() {
+        showOverlay('state-processing'); 
+        
+        await animateStep(1, 30, 600);
+        
+        try {
+            const reqPromise = fetch(`${API_URL}/student/verify`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    course_id: parseInt(courseId),
+                    frames: frameBuffer,
+                    client_timestamp: captureStartTime / 1000 
+                })
+            });
+
+            await animateStep(2, 60, 1500); 
+            await animateStep(3, 90, 800);
+
+            const res = await reqPromise;
+            const data = await res.json();
+
+            document.getElementById('step-fill').style.width = '100%';
+            await new Promise(r => setTimeout(r, 200));
+
+            if (data.success) {
+                verifyToken = data.verify_token;
+                showOverlay('state-form');
+            } else {
+                showOverlay('state-error', data.reason);
+            }
+
+        } catch (e) {
+            showOverlay('state-error', "网络连接错误");
+        }
+    }
+
+    function animateStep(stepNum, widthPct, duration) {
+        return new Promise(resolve => {
+            document.getElementById('step-fill').style.width = `${widthPct}%`;
+            for(let i=1; i<=3; i++) {
+                const el = document.getElementById(`step-${i}`);
+                if(i <= stepNum) {
+                    el.classList.add('active');
+                    if(i < stepNum) el.classList.add('done');
+                }
+            }
+            setTimeout(resolve, duration);
+        });
+    }
+
+    function showOverlay(stateId, errorMsg = "") {
+        const overlay = document.getElementById('overlay-layer');
+        overlay.classList.add('visible');
+        document.querySelectorAll('.state-content').forEach(el => el.classList.remove('active'));
+        document.getElementById(stateId).classList.add('active');
+        if (stateId === 'state-error' && errorMsg) {
+            document.getElementById('error-reason').innerText = errorMsg;
+        }
+    }
+
+    function hideOverlay() {
+        document.getElementById('overlay-layer').classList.remove('visible');
+    }
+
+    window.restartScan = function() {
+        hideOverlay();
+        document.getElementById('scan-frame').classList.remove('locked');
+        document.getElementById('scan-frame').classList.add('searching');
+        document.getElementById('status-pill').classList.remove('active');
+        
+        document.getElementById('step-fill').style.width = '0%';
+        document.querySelectorAll('.step-item').forEach(el => el.className = 'step-item');
+        document.getElementById('step-1').classList.add('active');
+
+        updateStatus("正在搜寻信号...", true);
+        isCapturing = false;
+        stableFrames = 0;
+        frameBuffer = [];
+        requestAnimationFrame(smartScanLoop);
+    };
+
+    function updateStatus(text, showSpinner) {
+        document.getElementById('status-text').innerText = text;
+        const spinner = document.getElementById('scan-spinner');
+        spinner.style.display = showSpinner ? 'block' : 'none';
+    }
+
+    // 【新增】强力关闭函数
+    window.closeApp = function() {
+        // 尝试1: 标准关闭
+        window.close();
+        
+        // 尝试2: 微信/支付宝 Bridge
+        if (typeof WeixinJSBridge !== "undefined") {
+            WeixinJSBridge.call('closeWindow');
+        }
+        if (navigator.userAgent.indexOf("AlipayClient") > 0) {
+            AlipayJSBridge.call('closeWebview');
+        }
+        
+        // 尝试3: 如果关不掉，给个提示
+        setTimeout(() => {
+            alert("浏览器禁止自动关闭，请手动关闭此标签页。");
+        }, 300);
+    };
+
+    window.submitInfo = async function() {
+        const no = document.getElementById('stu-no').value.trim();
+        const name = document.getElementById('stu-name').value.trim();
+        if(!no || !name) { alert("请填写完整"); return; }
+
+        localStorage.setItem("my_stu_no", no);
+        localStorage.setItem("my_stu_name", name);
+
+        try {
+            const res = await fetch(`${API_URL}/student/checkin`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ verify_token: verifyToken, student_number: no, name: name })
+            });
+            const data = await res.json();
+            if (data.success) {
+                // 标记该 Session 已签到
+                if (currentSessionId) {
+                    localStorage.setItem(`checked_in_session_${currentSessionId}`, "true");
+                }
+                
+                showOverlay('state-success');
+                if(videoStream) videoStream.getTracks().forEach(t => t.stop());
+            } else {
+                alert(data.detail);
+            }
+        } catch (e) { alert("网络错误"); }
+    };
+</script>
+</body>
+</html>

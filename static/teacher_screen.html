@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>签到大屏</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
+    <style>
+        body, html { height: 100%; margin: 0; overflow: hidden; background-color: #212529; color: white; font-family: 'Segoe UI', sans-serif; }
+        .container-fluid { height: 100%; }
+        
+        .left-panel {
+            display: flex; justify-content: center; align-items: center;
+            background-color: #f8f9fa; position: relative;
+        }
+        
+        /* 二维码容器，用于包裹图片和进度条 */
+        .qr-container {
+            position: relative;
+            display: none; /* 初始隐藏 */
+            width: 80%; max-width: 650px;
+            border: 15px solid white; border-radius: 20px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+            overflow: hidden; /* 确保进度条不溢出圆角 */
+        }
+
+        #qr-img {
+            width: 100%; height: auto; display: block;
+        }
+
+        /* 底部生命指示器进度条 */
+        .frame-progress {
+            position: absolute;
+            bottom: 0; left: 0;
+            height: 6px;
+            background: #2ecc71; /* 鲜绿色 */
+            width: 0%;
+            transition: width 0.1s linear; /* 线性动画 */
+            z-index: 5;
+        }
+
+        /* 升级版加载遮罩 */
+        #loading-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.98); color: #333;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 10; transition: opacity 0.5s ease;
+        }
+        
+        .progress-bar-container {
+            width: 60%; height: 6px; background: #e9ecef; border-radius: 10px;
+            margin-top: 20px; overflow: hidden;
+        }
+        #loading-bar {
+            width: 0%; height: 100%; background: #0d6efd; 
+            transition: width 0.2s linear;
+        }
+
+        .right-panel {
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            background: linear-gradient(135deg, #212529 0%, #343a40 100%);
+            border-left: 1px solid #444;
+        }
+        .data-card {
+            background: rgba(255,255,255,0.05); padding: 30px 50px; border-radius: 20px;
+            text-align: center; margin-bottom: 40px; backdrop-filter: blur(10px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .big-number { font-size: 6rem; font-weight: bold; color: #2ecc71; line-height: 1; }
+        .total-number { font-size: 2.5rem; color: #adb5bd; }
+        
+        .log-box {
+            height: 200px; overflow: hidden; width: 100%; text-align: center;
+            mask-image: linear-gradient(to bottom, transparent, black 20%, black 80%, transparent);
+        }
+        .log-item {
+            font-size: 1.5rem; color: #ffc107; margin-bottom: 10px;
+            animation: fadeInUp 0.5s ease;
+        }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+
+        .fab-container { position: fixed; top: 30px; right: 30px; z-index: 100; display: flex; gap: 10px; }
+        .btn-glass {
+            background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2);
+            backdrop-filter: blur(5px); transition: all 0.3s;
+        }
+        .btn-glass:hover { background: rgba(255,255,255,0.2); transform: scale(1.05); }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid row g-0">
+    <div class="col-7 left-panel">
+        <div id="loading-overlay">
+            <h2 class="fw-bold">🚀 正在准备签到资源</h2>
+            <p class="text-muted mb-0" id="loading-text">初始化...</p>
+            <div class="progress-bar-container">
+                <div id="loading-bar"></div>
+            </div>
+            <p class="text-muted small mt-2">预加载所有帧以确保流畅播放</p>
+        </div>
+        
+        <div class="qr-container" id="qr-wrapper">
+            <img id="qr-img" src="" alt="Scan QR">
+            <div class="frame-progress" id="frame-bar"></div>
+        </div>
+    </div>
+
+    <div class="col-5 right-panel">
+        <h2 class="mb-5 text-light opacity-75" id="course-name-display">课程加载中...</h2>
+        <div class="data-card">
+            <div class="text-uppercase text-muted small mb-2" style="letter-spacing: 2px;">CHECKED IN</div>
+            <div>
+                <span class="big-number" id="checked-count">0</span>
+                <span class="total-number">/ <span id="total-count">--</span></span>
+            </div>
+        </div>
+        <div class="log-box" id="log-list">
+            <div class="text-muted mt-5">等待学生扫码...</div>
+        </div>
+    </div>
+</div>
+
+<div class="fab-container">
+    <button id="end-btn" class="btn btn-danger px-4 rounded-pill shadow" onclick="showEndModal()">⏹️ 结束签到</button>
+    <button id="fullscreen-btn" class="btn btn-glass px-3 rounded-circle shadow" onclick="toggleFullScreen()">⛶</button>
+</div>
+
+<div class="modal fade" id="endSessionModal" tabindex="-1" style="color: #333;">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header border-0">
+                <h5 class="modal-title fw-bold">⚠️ 确认结束</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center py-4">
+                <h4>确定要结束签到吗？</h4>
+                <p class="text-muted">结束生将无法继续扫码，系统将自动生成考勤报表。</p>
+            </div>
+            <div class="modal-footer border-0 justify-content-center pb-4">
+                <button type="button" class="btn btn-light px-4" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-danger px-4" onclick="confirmFinish()">确认结束</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const API_URL = window.location.origin;
+    const token = localStorage.getItem("token");
+    
+    // --- 配置区 ---
+    const FRAME_DURATION = 2000; 
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const courseId = urlParams.get('cid');
+    const courseName = decodeURIComponent(urlParams.get('name') || '当前课程');
+    const paramSid = urlParams.get('sid');
+    
+    document.getElementById('course-name-display').innerText = courseName;
+
+    let sessionId = null;
+    let qrUrls = [];
+    let isRotationRunning = false;
+    let statsTimer = null;
+    let rotationBaseTime = 0;
+    
+    // 内存缓存：存放预加载好的 Image 对象
+    let frameCache = []; 
+
+    const endModal = new bootstrap.Modal(document.getElementById('endSessionModal'));
+
+    function normalizeQrUrls(data) {
+        if (Array.isArray(data)) return data;
+        if (data && data.images && Array.isArray(data.images)) return data.images;
+        return [];
+    }
+
+    window.onload = async function() {
+        if(!token) { alert("请先登录"); location.href="teacher_dashboard.html"; return; }
+        if (paramSid) await loadSessionById(paramSid);
+        else await checkAndResumeSession();
+    };
+
+    async function loadSessionById(targetSid) {
+        try {
+            const res = await fetch(`${API_URL}/courses/${courseId}/active_session`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (data.active) {
+                sessionId = data.session_id;
+                qrUrls = normalizeQrUrls(data.qr_urls);
+                await preloadAllFrames(); 
+                startStatsPolling();
+            } else {
+                alert("Session已结束"); history.back();
+            }
+        } catch (err) { console.error(err); }
+    }
+
+    async function checkAndResumeSession() {
+        try {
+            const res = await fetch(`${API_URL}/courses/${courseId}/active_session`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (data.active) {
+                sessionId = data.session_id;
+                qrUrls = normalizeQrUrls(data.qr_urls);
+                await preloadAllFrames();
+                startStatsPolling();
+            } else {
+                await startNewSession();
+            }
+        } catch (err) { console.error(err); }
+    }
+
+    async function startNewSession() {
+        try {
+            const res = await fetch(`${API_URL}/courses/${courseId}/sessions/start`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail);
+            sessionId = data.session_id;
+            qrUrls = normalizeQrUrls(data.qr_urls);
+            await preloadAllFrames();
+            startStatsPolling();
+        } catch (err) { alert(err.message); history.back(); }
+    }
+
+    // ==========================================
+    // 🚀 核心：全量预加载逻辑
+    // ==========================================
+    async function preloadAllFrames() {
+        if (!qrUrls || qrUrls.length === 0) { alert("无图片数据"); return; }
+
+        const total = qrUrls.length;
+        let loaded = 0;
+        
+        frameCache = new Array(total).fill(null);
+        const CONCURRENCY = 6;
+        
+        const downloadImage = (index) => {
+            return new Promise((resolve) => {
+                const img = new Image();
+                const url = qrUrls[index];
+                const fullUrl = url.startsWith('http') ? url : `${API_URL}${url}`;
+                
+                img.onload = () => {
+                    loaded++;
+                    updateLoadingUI(loaded, total);
+                    frameCache[index] = img; 
+                    resolve();
+                };
+                img.onerror = () => {
+                    console.warn(`帧 ${index} 加载失败`);
+                    loaded++;
+                    updateLoadingUI(loaded, total);
+                    resolve();
+                };
+                img.src = fullUrl;
+            });
+        };
+
+        const queue = [...Array(total).keys()];
+        const workers = [];
+
+        for (let i = 0; i < CONCURRENCY; i++) {
+            workers.push(async () => {
+                while (queue.length > 0) {
+                    const idx = queue.shift();
+                    await downloadImage(idx);
+                }
+            });
+        }
+
+        await Promise.all(workers.map(w => w()));
+        finishLoading();
+    }
+
+    function updateLoadingUI(current, total) {
+        const pct = Math.round((current / total) * 100);
+        document.getElementById('loading-bar').style.width = `${pct}%`;
+        document.getElementById('loading-text').innerText = `已缓冲 ${current}/${total} 帧`;
+    }
+
+    // 修改 finishLoading 函数
+    async function finishLoading() {
+        // 1. 资源加载好了，通知后端重置计时器
+        try {
+            console.log("📥 资源就绪，正在请求重置服务器计时...");
+            await fetch(`${API_URL}/courses/sessions/${sessionId}/reset_timer`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            console.log("✅ 服务器计时已重置，开始播放");
+        } catch (e) {
+            console.error("重置计时失败，可能会导致验证不同步", e);
+        }
+
+        // 2. 隐藏遮罩，显示界面
+        const overlay = document.getElementById('loading-overlay');
+        overlay.style.opacity = '0';
+        
+        setTimeout(() => {
+            overlay.style.display = 'none';
+            
+            // 显示包裹容器
+            const wrapper = document.getElementById('qr-wrapper');
+            wrapper.style.display = 'inline-block';
+            wrapper.classList.add('animate__animated', 'animate__zoomIn');
+            
+            // 3. 启动纯内存轮播
+            startMemoryRotation();
+        }, 500);
+    }
+
+    // ==========================================
+    // 🎥 纯内存轮播 (带生命指示器)
+    // ==========================================
+    function startMemoryRotation() {
+        isRotationRunning = true;
+        rotationBaseTime = Date.now();
+        tick();
+    }
+
+    function tick() {
+        if (!isRotationRunning) return;
+
+        const now = Date.now();
+        const elapsed = now - rotationBaseTime;
+        
+        // 1. 更新生命指示器进度条
+        // ( elapsed % FRAME_DURATION ) / FRAME_DURATION -> 0.0 ~ 1.0
+        const frameProgress = (elapsed % FRAME_DURATION) / FRAME_DURATION;
+        document.getElementById('frame-bar').style.width = `${frameProgress * 100}%`;
+
+        // 2. 计算并切换图片
+        const targetIndex = Math.floor(elapsed / FRAME_DURATION) % frameCache.length;
+        const cachedImg = frameCache[targetIndex];
+        const imgEl = document.getElementById('qr-img');
+
+        if (cachedImg && cachedImg.complete) {
+            if (imgEl.src !== cachedImg.src) {
+                imgEl.src = cachedImg.src;
+            }
+        }
+
+        requestAnimationFrame(tick);
+    }
+
+    // --- 其他辅助逻辑 ---
+    function startStatsPolling() {
+        pollStats();
+        if(statsTimer) clearInterval(statsTimer);
+        statsTimer = setInterval(pollStats, 2000);
+    }
+
+    async function pollStats() {
+        if (!sessionId) return;
+        try {
+            const res = await fetch(`${API_URL}/courses/sessions/${sessionId}/stats`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            document.getElementById('checked-count').innerText = data.checked;
+            document.getElementById('total-count').innerText = data.total;
+            if (data.latest_names && data.latest_names.length > 0) {
+                const logBox = document.getElementById('log-list');
+                const html = data.latest_names.map(n => `<div class="log-item">🎉 ${n} 已签到</div>`).join('');
+                if (logBox.innerHTML !== html) logBox.innerHTML = html;
+            }
+        } catch (err) {}
+    }
+
+    function showEndModal() { endModal.show(); }
+
+    async function confirmFinish() {
+        endModal.hide();
+        try {
+            const res = await fetch(`${API_URL}/courses/sessions/${sessionId}/stop`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                isRotationRunning = false; 
+                clearInterval(statsTimer);
+                const safeName = encodeURIComponent(courseName);
+                location.href = `session_report.html?sid=${sessionId}&cid=${courseId}&name=${safeName}`;
+            }
+        } catch (e) { alert("网络错误"); }
+    }
+
+    function toggleFullScreen() {
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+        else if (document.exitFullscreen) document.exitFullscreen();
+    }
+    
+    let mouseTimer = null;
+    document.addEventListener('mousemove', () => {
+        document.body.style.cursor = 'default';
+        document.querySelector('.fab-container').style.opacity = '1';
+        if (mouseTimer) clearTimeout(mouseTimer);
+        mouseTimer = setTimeout(() => {
+            document.body.style.cursor = 'none';
+            document.querySelector('.fab-container').style.opacity = '0';
+        }, 3000);
+    });
+</script>
+</body>
+</html>

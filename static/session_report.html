@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>签到报表</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .status-select { 
+            border: 1px solid transparent; 
+            background: transparent; 
+            cursor: pointer; 
+            font-weight: bold; 
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+        .status-select:hover { border-color: #ccc; background-color: #f8f9fa; }
+        
+        /* 状态颜色定义 */
+        .st-present { color: #198754; } /* Green */
+        .st-absent { color: #dc3545; }  /* Red */
+        .st-late { color: #ffc107; }    /* Yellow */
+        .st-leave { color: #6c757d; }   /* Gray */
+        
+        .summary-card { border: none; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+    </style>
+</head>
+<body class="bg-light p-4">
+
+    <div class="container" style="max-width: 900px;">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <a id="back-btn" href="#" class="btn btn-outline-secondary">← 返回课程详情</a>
+            <h4 class="mb-0">📑 签到结果报表</h4>
+            <div style="width: 100px;"></div> </div>
+
+        <div class="row mb-4 text-center">
+            <div class="col-md-4">
+                <div class="card summary-card bg-white p-3">
+                    <h3 class="text-success fw-bold" id="present-count">-</h3>
+                    <div class="text-muted">实到人数</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card summary-card bg-white p-3">
+                    <h3 class="text-danger fw-bold" id="absent-count">-</h3>
+                    <div class="text-muted">缺勤人数</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card summary-card bg-white p-3">
+                    <h3 class="text-primary fw-bold" id="rate">-</h3>
+                    <div class="text-muted">出勤率</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="d-flex justify-content-end mb-3">
+            <button onclick="exportExcel()" class="btn btn-success">
+                📥 导出本次考勤 Excel
+            </button>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-body p-0">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-4">学号</th>
+                            <th>姓名</th>
+                            <th>班级</th>
+                            <th>状态 (点击修改)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="record-list">
+                        <tr><td colspan="4" class="text-center py-4 text-muted">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        const API_URL = window.location.origin;
+        const token = localStorage.getItem("token");
+        
+        // URL 参数解析
+        const urlParams = new URLSearchParams(window.location.search);
+        const sessionId = urlParams.get('sid');
+        const courseId = urlParams.get('cid');
+        const courseName = urlParams.get('name');
+
+        // 初始化返回按钮
+        const backBtn = document.getElementById('back-btn');
+        if (courseId) {
+            const safeName = encodeURIComponent(courseName || '课程详情');
+            backBtn.href = `course_detail.html?id=${courseId}&name=${safeName}`;
+        } else {
+            backBtn.href = "teacher_dashboard.html";
+        }
+
+        // 页面加载
+        window.onload = async () => {
+            if(!token) location.href = "teacher_dashboard.html";
+            if(!sessionId) { alert("缺少参数"); return; }
+            await loadData();
+        };
+
+        // --- 加载数据 ---
+        async function loadData() {
+            try {
+                // 调用 detail 接口 (需要后端配合实现)
+                const res = await fetch(`${API_URL}/courses/sessions/${sessionId}/detail`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (res.status === 401) { alert("登录已过期"); location.href="teacher_dashboard.html"; return; }
+                const list = await res.json();
+                
+                const tbody = document.getElementById('record-list');
+                tbody.innerHTML = "";
+
+                let present = 0, absent = 0;
+
+                list.forEach(item => {
+                    // 统计
+                    if (['present', 'late'].includes(item.status)) present++;
+                    else absent++;
+
+                    // 渲染行
+                    // 如果 status 是 normal (旧数据兼容)，视为 present
+                    let status = item.status === 'normal' ? 'present' : item.status;
+                    let colorClass = `st-${status}`;
+
+                    tbody.innerHTML += `
+                        <tr>
+                            <td class="ps-4">${item.student_number}</td>
+                            <td>${item.name}</td>
+                            <td>${item.class_name}</td>
+                            <td>
+                                <select class="status-select ${colorClass}" onchange="updateStatus('${item.student_number}', this)">
+                                    <option value="present" ${status==='present'?'selected':''}>✅ 已到</option>
+                                    <option value="absent" ${status==='absent'?'selected':''}>❌ 缺勤</option>
+                                    <option value="late" ${status==='late'?'selected':''}>⚠️ 迟到</option>
+                                    <option value="leave" ${status==='leave'?'selected':''}>🤒 请假</option>
+                                </select>
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                // 更新顶部统计
+                const total = list.length;
+                document.getElementById('present-count').innerText = present;
+                document.getElementById('absent-count').innerText = total - present;
+                const rate = total > 0 ? Math.round((present / total) * 100) : 0;
+                document.getElementById('rate').innerText = rate + "%";
+
+            } catch (e) {
+                console.error(e);
+                document.getElementById('record-list').innerHTML = `<tr><td colspan="4" class="text-center text-danger">加载失败</td></tr>`;
+            }
+        }
+
+        // --- 修改状态 ---
+        async function updateStatus(studentNumber, selectEl) {
+            const newStatus = selectEl.value;
+            // 立即改变颜色
+            selectEl.className = `status-select st-${newStatus}`;
+
+            try {
+                const res = await fetch(`${API_URL}/courses/sessions/${sessionId}/records`, {
+                    method: 'PUT',
+                    headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        student_number: studentNumber,
+                        status: newStatus
+                    })
+                });
+                if(res.ok) {
+                    // 修改成功，刷新一下统计数据 (静默刷新，不闪屏)
+                    loadData(); 
+                } else {
+                    alert("修改失败");
+                    loadData(); // 失败还原
+                }
+            } catch(e) {
+                alert("网络错误");
+            }
+        }
+
+        // --- 导出 Excel ---
+        async function exportExcel() {
+            try {
+                // 使用 fetch 下载，可以带 Header
+                const res = await fetch(`${API_URL}/courses/sessions/${sessionId}/export`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (res.status !== 200) {
+                    alert("导出失败"); return;
+                }
+
+                // 处理二进制流
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `attendance_report_${sessionId}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url); // 释放内存
+            } catch (e) {
+                console.error(e);
+                alert("导出出错");
+            }
+        }
+    </script>
+</body>
+</html>
